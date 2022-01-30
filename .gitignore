@@ -1,0 +1,6 @@
+/venv/
+/uploads/products/
+/.idea/
+/online_shop/__pycache__/
+/shop_app/__pycache__/
+/shop_app/migrations/__pycache__/

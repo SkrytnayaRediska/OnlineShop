@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "online_shop"
+version = "0.1.0"
+description = "Simplified application for online ordering"
+authors = ["Olga Erokhina <olga@arusnavi.ru>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+Django = "^4.0.1"
+celery = "^5.2.3"
+DateTime = "^4.3"
+django-rest-framework = "^0.1.0"
+psycopg2 = "^2.9.3"
+Pillow = "^9.0.0"
+PyJWT = "^2.3.0"
+redis = "^4.1.2"
+docker-compose = "^1.29.2"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+

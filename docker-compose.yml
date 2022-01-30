@@ -1,0 +1,41 @@
+version: "3"
+
+services:
+  app:
+    command: >
+      sh -c "poetry run python3 manage.py migrate &&
+             poetry run python3 manage.py createsuperuser --noinput --email test@test.com &&
+             poetry run python3 manage.py runserver 0.0.0.0:8000"
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+  db:
+    image: postgres:12.0-alpine
+    volumes:
+      - postgres_data:/app
+    environment:
+      - POSTGRES_USER=olga
+      - POSTGRES_PASSWORD=
+      - POSTGRES_DB=shop
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:alpine
+  celery:
+    restart: always
+    build:
+      context: .
+    command: >
+        sh -c "poetry run celery -A online_shop worker -l info"
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+      - redis
+      - app
+volumes:
+  postgres_data:
