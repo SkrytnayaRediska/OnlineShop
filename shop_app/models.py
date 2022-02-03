@@ -80,15 +80,11 @@ class Category(models.Model):
     def __str__(self):
         return self.name
 
-    @staticmethod
-    def get_all_categories():
-        return Category.objects.all()
-
 
 class Discount(models.Model):
     name = models.CharField(max_length=250)
     discount_value = models.IntegerField()
-    date_created = models.DateField()
+    date_created = models.DateTimeField()
     date_expire = models.DateTimeField()
 
     def __str__(self):
@@ -106,18 +102,6 @@ class ProductItem(models.Model):
 
     def __str__(self):
         return self.name
-
-    @staticmethod
-    def get_products_by_id(ids):
-        return ProductItem.objects.filter(id__in=ids)
-
-    @staticmethod
-    def get_all_products():
-        return ProductItem.objects.all()
-
-    @staticmethod
-    def get_all_products_by_category_id(category_id):
-        return ProductItem.objects.filter(category=category_id)
 
 
 class Promocode(models.Model):

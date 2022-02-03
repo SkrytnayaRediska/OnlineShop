@@ -6,6 +6,9 @@ import smtplib
 import datetime
 
 
+WEEKDAY_TO_SEND_ACTUAL_DISCOUNTS_NOTIF = 5   # Saturday
+
+
 @shared_task
 def order_created(order_id, user_id):
     user = User.objects.get(id=user_id)
@@ -24,7 +27,7 @@ def order_created(order_id, user_id):
 def send_weekly_notif(self, user_id):
     try:
         today = datetime.datetime.today().weekday()
-        if today == 5:   # Saturday
+        if today == WEEKDAY_TO_SEND_ACTUAL_DISCOUNTS_NOTIF:
             discounts = ProductItem.objects.select_related("discount")\
                 .filter(discount__date_expire__gte=datetime.datetime.now(datetime.timezone.utc))\
                 .values("name", "discount__name")
@@ -45,28 +48,23 @@ def send_weekly_notif(self, user_id):
         print(f"ERROR IN SENDING EMAIL {exc}")
 
 
-@shared_task(bind=True, default_retry_delay=60)
-def delivery_email_send_task(self, user_id, order_id):
+@shared_task
+def delivery_email_send_task(user_id, order_id):
     try:
         order = OrderInfo.objects.get(id=order_id)
         user = User.objects.get(id=user_id)
         delivery_notif_sent = order.delivery_notif_sent
-        notif_in_time_in_seconds = order.delivery_notif_in_time * 60 * 60
         if not delivery_notif_sent:
-            delivery_date = order.delivery_date
-            delta = delivery_date - datetime.datetime.now(datetime.timezone.utc)
-            if delta.seconds > notif_in_time_in_seconds:
-                raise Exception
-            else:
-                email = ["olga@arusnavi.ru"]
-                subject = 'Order nr. {}'.format(order_id)
-                message = 'Dear {},\n\nYour order will be delivered in {} hours\nDelivery address is {}.'\
-                    .format(user.name, order.delivery_notif_in_time, order.delivery_address)
-                mail_sent = send_mail(subject, message, from_email=EMAIL_HOST_USER, recipient_list=email)
-                return mail_sent
-
+            email = ["olga@arusnavi.ru"]
+            subject = 'Order nr. {}'.format(order_id)
+            message = 'Dear {},\n\nYour order will be delivered in {} hours\nDelivery address is {}.'\
+                .format(user.name, order.delivery_notif_in_time, order.delivery_address)
+            mail_sent = send_mail(subject, message, from_email=EMAIL_HOST_USER, recipient_list=email)
+            order.delivery_notif_sent = True
+            order.save()
+            return mail_sent
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=60)
+        print(f"EXCEPTION IN DELIVERY NOTIF SENDING: {exc}")
 
 
 @shared_task

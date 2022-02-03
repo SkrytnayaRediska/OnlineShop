@@ -2,6 +2,8 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db import transaction
+from django.db.models import F
 import datetime
 from .serializers import (
     LoginSerializer, RegistrationSerializer, ProductItemSerializer, BasketSerializer,
@@ -57,38 +59,41 @@ class AllProductItemsView(APIView):
 class UserBasketView(APIView):
     permission_classes = (IsAuthenticated,)
 
-    def get_total_price_for_products_in_basket(self, basket):
+    def get_items_additional_info(self, basket, request):
         result_price = 0
         for item in basket:
-            discount = item.get("discount__discount_value")
+            if item.get("image"):
+                item['photo_url'] = request.build_absolute_uri(item.get("image"))
+            else:
+                item['photo_url'] = None
 
+            discount = item.get("discount_value")
             if discount:
                 date_exp = item.get("discount__date_expire")
                 delta = date_exp - datetime.datetime.now(datetime.timezone.utc)
                 if delta.days >= 0 and delta.seconds >= 0:
-                    result_price += (item.get("price") * (100 - discount) / 100) * item.get("basket__number_of_items")
+                    result_price += (item.get("price") * (100 - discount) / 100) * item.get("number_of_items")
                 else:
-                    result_price += item.get("price") * item.get("basket__number_of_items")
-                    item["discount__discount_value"] = 0
+                    result_price += item.get("price") * item.get("number_of_items")
+                    item["discount_value"] = 0
             else:
-                result_price += item.get("price") * item.get("basket__number_of_items")
+                result_price += item.get("price") * item.get("number_of_items")
 
-        return basket, result_price
+        return {'items': list(basket), 'result_price': result_price}
 
     def get(self, request):
         user_id = request.user.id
         basket = ProductItem.objects.prefetch_related("basket_set").\
             filter(basket__user_id=user_id).\
-            values("name", "price", "description", "basket__number_of_items", "discount__discount_value",
-                   "discount__date_expire", "image")
+            values("name", "price", "description", "image", "discount__date_expire",
+                   number_of_items=F('basket__number_of_items'),
+                   discount_value=F("discount__discount_value"))
 
-        basket, result_price = self.get_total_price_for_products_in_basket(basket)
-        serializer = BasketSerializer(basket, many=True, context={"request": request})
-        resp = dict()
-        resp["items"] = serializer.data
-        resp["result_price"] = result_price
+        items_info = self.get_items_additional_info(basket, request)
+        serializer = BasketSerializer(data=items_info)
+        serializer.is_valid(raise_exception=True)
 
-        return Response(resp)
+        return Response(serializer.data)
 
     def put(self, request):
         user = request.user
@@ -101,15 +106,14 @@ class UserBasketView(APIView):
             record.save()
             basket = ProductItem.objects.prefetch_related("basket_set"). \
                 filter(basket__user_id=user.id). \
-                values("name", "price", "description", "basket__number_of_items",
-                       "discount__discount_value", "discount__date_expire", "image")
+                values("name", "price", "description", "image", "discount__date_expire",
+                   number_of_items=F('basket__number_of_items'),
+                   discount_value=F("discount__discount_value"))
 
-            new_basket, result_price = self.get_total_price_for_products_in_basket(basket)
-            serializer = BasketSerializer(basket, many=True, context={"request": request})
-            resp = dict()
-            resp["items"] = serializer.data
-            resp["result_price"] = result_price
-            return Response(resp, status=status.HTTP_200_OK)
+            items_info = self.get_items_additional_info(basket, request)
+            serializer = BasketSerializer(data=items_info)
+            serializer.is_valid(raise_exception=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -147,40 +151,13 @@ class DeleteProductItemFromBasket(APIView):
 
 class CreateOrderView(APIView):
     permission_classes = (IsAuthenticated,)
+    item_info = dict()
 
-    def post(self, request):
-        """
-        This method:
-           1. accepts order-info data from request
-           2. calculates amount price with all features like discounts, promocodes and cashback
-           3. creates orderinfo record in db
-           4. starts celery task for sending notif about order placing
-           5. starts celery task for sending notif about delivery
-        """
-
-        # ------------------ GET DATA FROM REQUEST --------------------------------------
-        user_id = request.user.id
-        user = User.objects.filter(id=user_id).first()
-        is_required_substract_cashback = bool(request.data.get("substract_cashback"))
-        promocode_name = request.data.get("promocode_name")
-        delivery_method = request.data.get("delivery_method")
-        payment_method = request.data.get("payment_method")
-        comment = request.data.get("comment")
-        order_date = datetime.date.today()
-        delivery_date = request.data.get("delivery_date")
-        delivery_date = datetime.datetime.strptime(delivery_date, '%Y-%m-%d %H:%M:%S')\
-            .replace(tzinfo=datetime.timezone.utc)
-        delivery_address = request.data.get("delivery_address")
-        payment_status = "Waiting"
-        delivery_status = "In process"
-        delivery_notif_required = bool(request.data.get("delivery_notif_required"))
-        delivery_notif_in_time = request.data.get("delivery_notif_in_time") if delivery_notif_required else None
+    def get_items_info(self, request):
         product_items_dict = request.data.get("product_items", {})
         product_items_ids = product_items_dict.keys()
-        product_items = ProductItem.objects.filter(id__in=product_items_ids)\
+        product_items = ProductItem.objects.filter(id__in=product_items_ids) \
             .values("id", "name", "price", "description", "discount__discount_value", "discount__date_expire")
-
-        # ---------------------- CALCULATE AMOUNT PRICE AND CASHBACK ------------------------
         amount_price = 0
         amount_number_of_items = 0
         items = dict()
@@ -192,7 +169,7 @@ class CreateOrderView(APIView):
             if discount:
                 date_exp = item.get("discount__date_expire")
                 delta = date_exp - datetime.datetime.now(datetime.timezone.utc)
-                if delta.days >= 0 and delta.seconds >= 0:
+                if delta.days >= 0:
                     amount_price += (price * (100 - discount) / 100) * number_of_items
                 else:
                     amount_price += price * item.getnumber_of_items
@@ -203,50 +180,64 @@ class CreateOrderView(APIView):
             amount_number_of_items += number_of_items
             items[str(item_id)] = number_of_items
 
+        self.items_info = {"items": items, "amount_price": amount_price,
+                           "amount_number_of_items": amount_number_of_items}
+
+    def add_promocode_discount_if_required(self, request):
+        promocode_name = request.data.get("promocode_name")
         promocode = Promocode.objects.get(name=promocode_name)
         if promocode.allowed_to_sum_with_discounts:
-            amount_price *= (100 - promocode.discount_value) / 100
+            self.items_info["amount_price"] *= (100 - promocode.discount_value) / 100
 
+    def cashback_processing_if_required(self, request):
+        is_required_substract_cashback = bool(request.data.get("substract_cashback"))
         cashback = Cashback.objects.all().first()
-        user_cashback_points = user.cashback_points
+        user_cashback_points = request.user.cashback_points
         sub_from_user_cashback = 0
         if cashback and is_required_substract_cashback:
             if user_cashback_points > cashback.sufficient_amount_to_subtract:
-                if amount_price > user_cashback_points:
-                    amount_price -= user_cashback_points
+                if self.items_info["amount_price"] > user_cashback_points:
+                    self.items_info["amount_price"] -= user_cashback_points
                     sub_from_user_cashback = user_cashback_points
                 else:
-                    sub_from_user_cashback = amount_price - 1
-                    amount_price = 1
+                    sub_from_user_cashback = self.items_info["amount_price"] - 1
+                    self.items_info["amount_price"] = 1
 
         new_cashback_points = user_cashback_points - sub_from_user_cashback
-        new_cashback_points += amount_price * (100 - cashback.cashback_value) / 100
-        user.cashback_points = new_cashback_points
-        user.save()
+        new_cashback_points += self.items_info["amount_price"] * (100 - cashback.cashback_value) / 100
+        request.user.cashback_points = new_cashback_points
+        request.user.save()
 
-        # ---------------------- CREATE ORDERINFO RECORD IN DB -----------------------------
-        order_info = OrderInfo.objects.create(amount_price=int(amount_price),
-                                              amount_number_of_items=amount_number_of_items,
-                                              delivery_method=delivery_method,
-                                              payment_method=payment_method,
-                                              comment=comment,
-                                              order_date=order_date,
-                                              delivery_date=delivery_date,
-                                              payment_status=payment_status,
-                                              delivery_status=delivery_status,
-                                              delivery_notif_required=delivery_notif_required,
-                                              delivery_notif_in_time=delivery_notif_in_time,
-                                              delivery_notif_sent=False,
-                                              product_items=items,
-                                              delivery_address=delivery_address,
-                                              user_id=user_id)
+    def fill_order_info_fields_to_serialize(self, request):
+        order_info = request.data.get("order_info")
+        order_info["user"] = request.user.id
+        order_info["product_items"] = self.items_info["items"]
+        order_info["amount_price"] = self.items_info["amount_price"]
+        order_info["amount_number_of_items"] = self.items_info["amount_number_of_items"]
+        return order_info
 
-        serializer = OrderInfoSerializer(order_info)
+    def send_notifications(self, request, order):
+        order_created.delay(order.id, request.user.id)
+        if order.delivery_notif_required:
+            delivery_date = order.delivery_date - datetime.timedelta(hours=order.delivery_notif_in_time)
 
-        # -------------------- SEND ORDER PLACING NOTIF AND DELIVERY NOTIF --------------------
-        order_created.delay(order_info.id, user_id)
-        if delivery_notif_required:
-            delivery_email_send_task.delay(user_id, order_info.id)
+            delivery_email_send_task.apply_async((request.user.id, order.id), eta=delivery_date)
+
+    @transaction.atomic
+    def post(self, request):
+
+        self.get_items_info(request)
+        self.add_promocode_discount_if_required(request)
+        self.cashback_processing_if_required(request)
+
+        order_info = self.fill_order_info_fields_to_serialize(request)
+
+        serializer = OrderInfoSerializer(data=order_info)
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
+
+        self.send_notifications(request, order)
+
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

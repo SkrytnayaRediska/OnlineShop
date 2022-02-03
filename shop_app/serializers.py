@@ -56,27 +56,27 @@ class ProductItemSerializer(serializers.ModelSerializer):
         fields = ('name', 'price', 'description', 'image')
 
 
-class BasketSerializer(serializers.Serializer):
+class ItemForBasketSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
     price = serializers.IntegerField()
     description = serializers.CharField(max_length=250)
-    number_of_items = serializers.IntegerField(source='basket__number_of_items')
-    discount = serializers.IntegerField(source="discount__discount_value")
-    discount__date_expire = serializers.DateTimeField(write_only=True)
-    photo_url = serializers.SerializerMethodField()
+    number_of_items = serializers.IntegerField()
+    discount_value = serializers.IntegerField(allow_null=True)
+    discount__date_expire = serializers.DateTimeField(write_only=True, allow_null=True)
+    photo_url = serializers.CharField(allow_null=True, allow_blank=True)
 
-    def get_photo_url(self, data):
-        request = self.context.get('request')
-        photo_url = data["image"]
-        if photo_url != "":
-            return request.build_absolute_uri(photo_url)
-        else:
-            return None
+
+class BasketSerializer(serializers.Serializer):
+    items = ItemForBasketSerializer(many=True)
+    result_price = serializers.IntegerField()
 
 
 class OrderInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderInfo
         fields = ("__all__")
+
+    def create(self, validated_data):
+        return OrderInfo.objects.create(**validated_data)
 
 
