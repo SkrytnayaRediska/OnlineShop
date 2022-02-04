@@ -16,6 +16,7 @@ class UserManager(BaseUserManager):
 
         user = self.model(email=self.normalize_email(email))
         user.set_password(password)
+        user.is_superuser = False
         user.name = name
         user.surname = surname
         user.phone = phone
@@ -37,7 +38,7 @@ class UserManager(BaseUserManager):
         return user
 
 
-class User(AbstractBaseUser, PermissionsMixin):
+class User(AbstractBaseUser):
     username = None
     email = models.EmailField(db_index=True, unique=True)
     name = models.CharField(max_length=50, null=True)
@@ -47,6 +48,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     weekly_discount_notif_required = models.BooleanField(default=True)
     cashback_points = models.FloatField(default=0.0)
     is_active = models.BooleanField(default=True)
+    is_superuser = models.BooleanField(default=False)
 
     is_staff = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
